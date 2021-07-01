@@ -400,6 +400,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bindlang"
+version = "0.1.0"
+dependencies = [
+ "koto_runtime",
+ "lang_bindings",
+ "lazy_static",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -938,6 +949,12 @@ name = "doc-comment"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fea41bba32d969b513997752735605054bc0dfa92b4c56bf1189f2e174be7a10"
+
+[[package]]
+name = "downcast-rs"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
 
 [[package]]
 name = "either"
@@ -1664,6 +1681,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61124eeebbd69b8190558df225adf7e4caafce0d743919e5d6b19652314ec5ec"
 dependencies = [
  "cfg-if 1.0.0",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -1728,12 +1748,73 @@ dependencies = [
 ]
 
 [[package]]
+name = "koto"
+version = "0.7.0"
+source = "git+https://github.com/llogiq/koto?branch=vtable#32f6537214e2f0a388515273226a06fbe1a0192c"
+dependencies = [
+ "koto_bytecode",
+ "koto_parser",
+ "koto_runtime",
+ "parking_lot",
+]
+
+[[package]]
+name = "koto_bytecode"
+version = "0.7.0"
+source = "git+https://github.com/llogiq/koto?branch=vtable#32f6537214e2f0a388515273226a06fbe1a0192c"
+dependencies = [
+ "koto_parser",
+ "smallvec",
+]
+
+[[package]]
+name = "koto_lexer"
+version = "0.7.0"
+source = "git+https://github.com/llogiq/koto?branch=vtable#32f6537214e2f0a388515273226a06fbe1a0192c"
+dependencies = [
+ "unicode-width",
+ "unicode-xid",
+]
+
+[[package]]
+name = "koto_parser"
+version = "0.7.0"
+source = "git+https://github.com/llogiq/koto?branch=vtable#32f6537214e2f0a388515273226a06fbe1a0192c"
+dependencies = [
+ "koto_lexer",
+]
+
+[[package]]
+name = "koto_runtime"
+version = "0.7.0"
+source = "git+https://github.com/llogiq/koto?branch=vtable#32f6537214e2f0a388515273226a06fbe1a0192c"
+dependencies = [
+ "downcast-rs",
+ "indexmap",
+ "koto_bytecode",
+ "koto_lexer",
+ "koto_parser",
+ "num_cpus",
+ "parking_lot",
+ "rustc-hash",
+ "smallvec",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "kv-log-macro"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de8b303297635ad57c9f5059fd9cee7a47f8e8daa09df0fcd07dd39fb22977f"
 dependencies = [
  "log",
+]
+
+[[package]]
+name = "lang_bindings"
+version = "0.1.0"
+dependencies = [
+ "koto",
 ]
 
 [[package]]
@@ -2795,6 +2876,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "410f7acf3cb3a44527c5d9546bad4bf4e6c460915d5f9f2fc524498bfe8f70ce"
 
 [[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
+
+[[package]]
 name = "rustc_version"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3284,11 +3371,13 @@ dependencies = [
  "anyhow",
  "bimap",
  "bincode",
+ "bindlang",
  "chrono",
  "colored",
  "env_logger",
  "fake",
  "humantime-serde",
+ "lang_bindings",
  "lazy_static",
  "log",
  "num",

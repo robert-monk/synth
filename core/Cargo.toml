@@ -37,3 +37,7 @@ synth-gen = { path = "../gen", features = [ "shared" ] }
 uuid = { version = "0.8.2", features = ["v4"] }
 bimap = { version = "0.6.0", features = [ "std" ] }
 humantime-serde = "1.0.1"
+
+# language bindings
+lang_bindings = { path = "../lang_bindings" }
+bindlang = { path = "../bindlang" }
