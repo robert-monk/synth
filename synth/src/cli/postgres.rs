@@ -4,7 +4,8 @@ use anyhow::{Context, Result};
 
 use postgres::{Client, Column, Row};
 use rust_decimal::prelude::ToPrimitive;
-use serde_json::{Map, Number, Value};
+use synth_core::graph::{Number, Value};
+use serde_json::{Map, Value as JsonValue};
 use std::convert::TryFrom;
 
 use crate::sampler::Sampler;
@@ -25,34 +26,33 @@ pub struct PostgresExportStrategy {
 
 impl ExportStrategy for PostgresExportStrategy {
     fn export(self, params: ExportParams) -> Result<()> {
-        unimplemented!()
-        // let mut client =
-        //     Client::connect(&self.uri, postgres::tls::NoTls).expect("Failed to connect");
-        //
-        // let sampler = Sampler::try_from(&params.namespace)?;
-        // let values =
-        //     sampler.sample_seeded(params.collection_name.clone(), params.target, params.seed)?;
-        //
-        // match values {
-        //     Value::Array(collection_json) => {
-        //         self.insert_data(params.collection_name.unwrap().to_string(), &collection_json, &mut client)
-        //     }
-        //     Value::Object(namespace_json) => {
-        //         for (collection_name, collection_json) in namespace_json {
-        //             self.insert_data(
-        //                 collection_name,
-        //                 &collection_json
-        //                     .as_array()
-        //                     .expect("This is always a collection (sampler contract)"),
-        //                 &mut client,
-        //             )?;
-        //         }
-        //         Ok(())
-        //     }
-        //     _ => unreachable!(
-        //         "The sampler will never generate a value which is not an array or object (sampler contract)"
-        //     ),
-        // }
+        let mut client =
+            Client::connect(&self.uri, postgres::tls::NoTls).expect("Failed to connect");
+
+        let sampler = Sampler::try_from(&params.namespace)?;
+        let values =
+            sampler.sample_seeded(params.collection_name.clone(), params.target, params.seed)?;
+
+        match values {
+            Value::Array(collection) => {
+                self.insert_data(params.collection_name.unwrap().to_string(), &collection, &mut client)
+            }
+            Value::Object(namespace) => {
+                for (collection_name, collection_json) in namespace {
+                    self.insert_data(
+                        collection_name,
+                        &collection_json
+                            .as_array()
+                            .expect("This is always a collection (sampler contract)"),
+                        &mut client,
+                    )?;
+                }
+                Ok(())
+            }
+            _ => unreachable!(
+                "The sampler will never generate a value which is not an array or object (sampler contract)"
+            ),
+        }
     }
 }
 
@@ -273,7 +273,7 @@ impl ImportStrategy for PostgresImportStrategy {
             .ok_or_else(|| anyhow!("Could not find table '{}' in Postgres database.", name))
     }
 
-    fn into_value(self) -> Result<Value> {
+    fn into_value(self) -> Result<JsonValue> {
         unreachable!()
     }
 }
