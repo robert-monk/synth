@@ -165,31 +165,32 @@ fn bson_to_content(bson: &Bson) -> Content {
 
 impl ExportStrategy for MongoExportStrategy {
     fn export(self, params: ExportParams) -> Result<()> {
-        let mut client = Client::with_uri_str(&self.uri)?;
-        let sampler = Sampler::try_from(&params.namespace)?;
-        let values =
-            sampler.sample_seeded(params.collection_name.clone(), params.target, params.seed)?;
-
-        match values {
-            Value::Array(collection_json) => {
-                self.insert_data(params.collection_name.unwrap().to_string(), &collection_json, &mut client)
-            }
-            Value::Object(namespace_json) => {
-                for (collection_name, collection_json) in namespace_json {
-                    self.insert_data(
-                        collection_name,
-                        &collection_json
-                            .as_array()
-                            .expect("This is always a collection (sampler contract)"),
-                        &mut client,
-                    )?;
-                }
-                Ok(())
-            }
-            _ => unreachable!(
-                "The sampler will never generate a value which is not an array or object (sampler contract)"
-            ),
-        }
+        unimplemented!()
+        // let mut client = Client::with_uri_str(&self.uri)?;
+        // let sampler = Sampler::try_from(&params.namespace)?;
+        // let values =
+        //     sampler.sample_seeded(params.collection_name.clone(), params.target, params.seed)?;
+        //
+        // match values {
+        //     Value::Array(collection_json) => {
+        //         self.insert_data(params.collection_name.unwrap().to_string(), &collection_json, &mut client)
+        //     }
+        //     Value::Object(namespace_json) => {
+        //         for (collection_name, collection_json) in namespace_json {
+        //             self.insert_data(
+        //                 collection_name,
+        //                 &collection_json
+        //                     .as_array()
+        //                     .expect("This is always a collection (sampler contract)"),
+        //                 &mut client,
+        //             )?;
+        //         }
+        //         Ok(())
+        //     }
+        //     _ => unreachable!(
+        //         "The sampler will never generate a value which is not an array or object (sampler contract)"
+        //     ),
+        // }
     }
 }
 
