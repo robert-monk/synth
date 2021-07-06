@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 
 use postgres::{Client, Column, Row};
 use rust_decimal::prelude::ToPrimitive;
-use synth_core::graph::{Number, Value};
-use serde_json::{Map, Value as JsonValue};
+use synth_core::graph::prelude::*;
+use serde_json::{Map, Value as JsonValue, Number as JsonNumber};
 use std::convert::TryFrom;
 
 use crate::sampler::Sampler;
@@ -140,7 +140,7 @@ impl ImportStrategy for PostgresImportStrategy {
             .last()
             .ok_or_else(|| anyhow!("Cannot import data. No catalog specified in the uri"))?;
 
-        let query ="SELECT table_name FROM information_schema.tables where table_catalog = $1 and table_schema = 'public' and table_type = 'BASE TABLE'";
+        let query = "SELECT table_name FROM information_schema.tables where table_catalog = $1 and table_schema = 'public' and table_type = 'BASE TABLE'";
 
         let table_names: Vec<String> = client
             .query(query, &[&catalog])
@@ -259,7 +259,7 @@ impl ImportStrategy for PostgresImportStrategy {
             namespace.try_update(
                 OptionalMergeStrategy,
                 &Name::from_str(&table).unwrap(),
-                &Value::from(values.0),
+                &JsonValue::from(values.0),
             )?;
         }
 
@@ -286,7 +286,7 @@ struct Collection {
 
 // Wrapper around rows
 #[derive(Debug)]
-struct Values(Vec<Value>);
+struct Values(Vec<JsonValue>);
 
 #[derive(Debug)]
 struct ColumnInfo {
@@ -327,47 +327,47 @@ impl TryFrom<Vec<Row>> for Values {
                     .columns()
                     .get(i)
                     .expect("Cannot go out of range here since iterator is bound by length");
-                let value = try_match_value(&row, i, column).unwrap_or(Value::Null);
+                let value = try_match_value(&row, i, column).unwrap_or(JsonValue::Null);
                 obj_content.insert(column.name().to_string(), value);
             }
-            values.push(Value::Object(obj_content));
+            values.push(JsonValue::Object(obj_content));
         }
         Ok(Values(values))
     }
 }
 
-fn try_match_value(row: &Row, i: usize, column: &Column) -> Result<Value> {
+fn try_match_value(row: &Row, i: usize, column: &Column) -> Result<JsonValue> {
     let value = match column.type_().name() {
-        "bool" => Value::Bool(row.try_get(i)?),
+        "bool" => JsonValue::Bool(row.try_get(i)?),
         "oid" => {
             unimplemented!()
         }
         "char" | "varchar" | "text" | "bpchar" | "name" | "unknown" => {
-            Value::String(row.try_get(i)?)
+            JsonValue::String(row.try_get(i)?)
         }
-        "int2" => Value::Number(Number::from(row.try_get::<_, i16>(i)?)),
-        "int4" => Value::Number(Number::from(row.try_get::<_, i32>(i)?)),
-        "int8" => Value::Number(Number::from(row.try_get::<_, i64>(i)?)),
-        "float4" => Value::Number(
-            Number::from_f64(row.try_get(i)?).expect("Cloud not convert to f64. Value was NaN."),
+        "int2" => JsonValue::Number(JsonNumber::from(row.try_get::<_, i16>(i)?)),
+        "int4" => JsonValue::Number(JsonNumber::from(row.try_get::<_, i32>(i)?)),
+        "int8" => JsonValue::Number(JsonNumber::from(row.try_get::<_, i64>(i)?)),
+        "float4" => JsonValue::Number(
+            JsonNumber::from_f64(row.try_get(i)?).expect("Cloud not convert to f64. Value was NaN."),
         ),
-        "float8" => Value::Number(
-            Number::from_f64(row.try_get(i)?).expect("Cloud not convert to f64. Value was NaN."),
+        "float8" => JsonValue::Number(
+            JsonNumber::from_f64(row.try_get(i)?).expect("Cloud not convert to f64. Value was NaN."),
         ),
         "numeric" => {
             let as_decimal: rust_decimal::Decimal = row.try_get(i)?;
-            Value::Number(
-                Number::from_f64(
+            JsonValue::Number(
+                JsonNumber::from_f64(
                     as_decimal
                         .to_f64()
                         .expect("Could not convert decimal to f64 for reasons todo"),
                 )
-                .expect("Cloud not convert to f64. Value was NaN."),
+                    .expect("Cloud not convert to f64. Value was NaN."),
             )
         }
-        "timestampz" => Value::String(row.try_get(i)?),
-        "timestamp" => Value::String(row.try_get(i)?),
-        "date" => Value::String(format!("{}", row.try_get::<_, chrono::NaiveDate>(i)?)),
+        "timestampz" => JsonValue::String(row.try_get(i)?),
+        "timestamp" => JsonValue::String(row.try_get(i)?),
+        "date" => JsonValue::String(format!("{}", row.try_get::<_, chrono::NaiveDate>(i)?)),
         _ => {
             return Err(anyhow!(
                 "Could not convert value. Converter not implemented for {}",
