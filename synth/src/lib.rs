@@ -1,22 +1,13 @@
 #![feature(format_args_capture, async_closure, map_first_last, box_patterns)]
 #![feature(error_iter)]
 #![allow(type_alias_bounds)]
-// #![deny(warnings)]
+#![deny(warnings)]
 
 #[macro_use]
 extern crate log;
 
 #[macro_use]
 extern crate anyhow;
-
-// #[macro_use]
-// extern crate diesel;
-
-// #[macro_use]
-// extern crate diesel_migrations;
-
-//#[macro_use]
-//extern crate lazy_static;
 
 #[allow(unused_imports)]
 #[macro_use]

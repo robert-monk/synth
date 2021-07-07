@@ -209,7 +209,7 @@ impl MongoExportStrategy {
         for value in collection {
             docs.push(match value_to_bson(value) {
                 Bson::Document(doc) => doc,
-                _ => bail!("invalid json document"),
+                _ => bail!("invalid bson document"),
             });
         }
 

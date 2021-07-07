@@ -2,8 +2,8 @@ use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::SeedableRng;
 use std::collections::{btree_map::Entry, BTreeMap};
-use std::convert::{TryFrom};
-use synth_core::graph::{Value};
+use std::convert::TryFrom;
+use synth_core::graph::Value;
 use synth_core::Graph;
 use synth_core::{Name, Namespace};
 use synth_gen::prelude::*;
@@ -22,9 +22,8 @@ fn sampler_progress_bar(target: u64) -> ProgressBar {
 
 impl Sampler {
     #[cfg(feature = "api")]
-    pub(crate) fn sample(self, collection_name: Option<Name>, target: usize) -> Result<JsonValue> {
-        // self.sample_seeded(collection_name, target, 0)
-        unimplemented!()
+    pub(crate) fn sample(self, collection_name: Option<Name>, target: usize) -> Result<Value> {
+        self.sample_seeded(collection_name, target, 0)
     }
 
     pub(crate) fn sample_seeded(
@@ -36,7 +35,6 @@ impl Sampler {
         let rng = rand::rngs::StdRng::seed_from_u64(seed);
         let model = self.graph.aggregate();
         let sample_strategy = SampleStrategy::new(collection_name, target);
-
 
         sample_strategy.sample(model, rng)
     }
@@ -89,6 +87,10 @@ impl NamespaceSampleStrategy {
 
         while generated < self.target {
             let next = model.complete(&mut rng)?;
+            // Here we are building a BTreeMap.
+            // Keys are the name of the collection and values are vectors of type synth_core::Value.
+            // If the key is absent, we insert the first vec sampled, otherwise we extend the existing Vec.
+            // In the future this should be replaced by a Sample/Samples struct which encapsulates this complexity.
             as_object(next)?
                 .into_iter()
                 .try_for_each(|(collection, value)| {
