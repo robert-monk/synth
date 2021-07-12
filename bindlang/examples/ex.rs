@@ -1,5 +1,4 @@
-use bindlang::{bindlang, bindlang_init, ExternalValue};
-use koto_runtime::Value;
+use bindlang::{bindlang, bindlang_main};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
 #[bindlang]
@@ -12,7 +11,8 @@ pub fn anotherone() {
     // still nothing
 }
 
-#[derive(Clone, Debug, Default, ExternalValue)]
+#[bindlang]
+#[derive(Clone, Debug, Default)]
 pub struct MyType;
 
 impl Display for MyType {
@@ -30,8 +30,10 @@ impl MyType {
     }
 }
 
+bindlang_main!();
+
 fn main() {
     let mut prelude = koto_runtime::ValueMap::new();
-    bindlang_init!(prelude);
+    bindlang_init(&mut prelude);
     println!("It runs");
 }

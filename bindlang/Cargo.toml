@@ -11,6 +11,4 @@ syn = { version = "1.0", features = ["extra-traits", "full", "fold", "parsing", 
 quote = "1.0"
 koto_runtime = { git = "https://github.com/llogiq/koto", branch = "vtable" }
 lang_bindings = { path = "../lang_bindings" }
-
-[dev-dependencies]
 lazy_static = "1.4.0"

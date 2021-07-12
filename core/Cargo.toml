@@ -40,4 +40,5 @@ humantime-serde = "1.0.1"
 
 # language bindings
 lang_bindings = { path = "../lang_bindings" }
+koto_runtime = { git = "https://github.com/llogiq/koto", branch = "vtable" }
 bindlang = { path = "../bindlang" }

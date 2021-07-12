@@ -84,6 +84,7 @@ pub struct SameAsContent {
     pub ref_: FieldRef,
 }
 
+#[bindlang::bindlang]
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "type")]
@@ -194,6 +195,7 @@ impl Content {
     }
 }
 
+#[bindlang::bindlang]
 impl Default for Content {
     fn default() -> Self {
         Self::Null

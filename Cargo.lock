@@ -3377,6 +3377,7 @@ dependencies = [
  "env_logger",
  "fake",
  "humantime-serde",
+ "koto_runtime",
  "lang_bindings",
  "lazy_static",
  "log",

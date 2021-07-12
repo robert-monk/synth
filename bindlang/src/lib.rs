@@ -6,250 +6,358 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::*;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-// A counter that gets incremented each time we bind something
-static LANG_BINDING_COUNT: AtomicUsize = AtomicUsize::new(0);
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 fn ident(s: &str) -> Ident {
     syn::parse_str(s).unwrap()
+}
+
+/// all we need to wrap a method
+struct MethodSig {
+    name: String,
+    args: usize,
+    inputs: String,
+    self_ty: Option<String>,
+}
+
+impl MethodSig {
+    // create a tuple expr
+    fn to_tuple(&self) -> Expr {
+        let fn_name = &self.name;
+        let fn_ident = ident(&self.name);
+        let inputs = &self.inputs;
+        let names: Vec<_> = (0..self.args).map(|i| ident(&format!("a{}", i))).collect();
+        let mut exprs = names.iter().enumerate().map(|(i, name)| {
+            parse_quote! {
+                ::lang_bindings::FromValue::from_value(&KeyPath::Index(#i, None), #name)?
+            }
+        });
+        let (call, is_method): (Expr, bool) = if let Some(ty) = &self.self_ty {
+            let ty_ident = ident(ty);
+            if self.args > 0 {
+                let a0: &Ident = &names[0];
+                let _: Expr = exprs.next().unwrap();
+                (
+                    parse_quote! {
+                        <#ty_ident as ::lang_bindings::FromValue>::from_value(&::lang_bindings::KeyPath::Index(0, None), #a0)?. #fn_ident(#(#exprs),*)
+                    },
+                    true,
+                )
+            } else {
+                (parse_quote! { #ty_ident :: #fn_ident() }, false)
+            }
+        } else {
+            (parse_quote! { #fn_ident(#(#exprs),*) }, false)
+        };
+        parse_quote! {
+            (
+                #fn_name,
+                ::koto_runtime::ExternalFunction::new(|vm, args| {
+                    match vm.get_args(args) {
+                        [#(#names),*] => Ok(::lang_bindings::IntoValue::into_value(#call)),
+                        args => ::lang_bindings::fn_type_error(#fn_name, #inputs, args),
+                    }
+                }, #is_method),
+            )
+        }
+    }
+}
+
+// We need some structures to keep stuff around
+#[derive(Default)]
+struct Context {
+    bare_fns: Vec<MethodSig>,
+    modules: HashMap<String, Vec<MethodSig>>,
+    vtables: HashMap<String, Vec<MethodSig>>,
+    types: HashMap<String, String>,
+}
+
+lazy_static::lazy_static! {
+    static ref CONTEXT: Arc<Mutex<Context>> = Arc::new(Mutex::new(Context::default()));
+}
+
+fn fn_binding(sig: &Signature, module: Option<String>, self_ty: Option<&Type>) {
+    let fn_ident = &sig.ident;
+    let inputs = &sig.inputs;
+    let method_sig = MethodSig {
+        name: fn_ident.to_string(),
+        args: inputs.len(),
+        inputs: quote!(#inputs).to_string(),
+        self_ty: self_ty.map(|ty| quote!(#ty).to_string()),
+    };
+    let ctx = &mut *CONTEXT.lock().unwrap();
+    if self_ty.is_some() {
+        if sig.receiver().is_some() {
+            &mut ctx.vtables
+        } else {
+            &mut ctx.modules
+        }
+        .entry(method_sig.self_ty.clone().unwrap())
+        .or_insert_with(Vec::new)
+    } else if let Some(m) = module {
+        ctx.modules.entry(m).or_insert_with(Vec::new)
+    } else {
+        &mut ctx.bare_fns
+    }
+    .push(method_sig)
+}
+
+fn get_attr_parens(attr: &Attribute) -> String {
+    attr.tokens
+        .to_string()
+        .trim_matches(&['(', ')'][..])
+        .to_owned()
+}
+
+fn get_module(attrs: &[Attribute]) -> Option<String> {
+    attrs.iter().find_map(|a| {
+        if a.path.get_ident().map_or(false, |i| i == "bindlang") {
+            Some(get_attr_parens(a))
+        } else {
+            None
+        }
+    })
+}
+
+static DERIVES: &[(&str, (&str, usize))] = &[
+    ("Default", ("default", 0)),
+    ("Clone", ("clone", 1)),
+    ("Display", ("to_string", 1)),
+    //TODO: map other traits
+];
+
+fn get_derives(ty: String, attrs: &[Attribute]) {
+    for attr in attrs {
+        if attr.path.get_ident().map_or(false, |i| i == "derive") {
+            for derive in get_attr_parens(attr).split(',') {
+                let derive = derive.trim_matches(char::is_whitespace);
+                for (trt, (name, args)) in DERIVES {
+                    if *trt == derive {
+                        let args = *args;
+                        let ctx = &mut CONTEXT.lock().unwrap();
+                        if args == 0 {
+                            ctx.modules
+                                .entry(ty.clone())
+                                .or_insert_with(Vec::new)
+                                .push(MethodSig {
+                                    name: name.to_string(),
+                                    args,
+                                    inputs: String::new(),
+                                    self_ty: Some(ty.clone()),
+                                })
+                        } else {
+                            ctx.vtables.entry(ty.clone()).or_insert_with(Vec::new).push(
+                                MethodSig {
+                                    name: name.to_string(),
+                                    args,
+                                    inputs: "self".to_string(), //TODO: add to DERIVES if we add traits w/ more args
+                                    self_ty: Some(ty.clone()),
+                                },
+                            );
+                        }
+                        break;
+                    };
+                }
+            }
+        }
+    }
+}
+
+fn create_map(items: &[MethodSig]) -> Expr {
+    let members = items.iter().map(|sig| sig.to_tuple());
+    parse_quote! {
+        ::koto_runtime::ValueMap::with_data(IntoIterator::into_iter([
+            #(#members),*
+        ]).map(|(k,v): (&str, ::koto_runtime::ExternalFunction)| (
+            ::koto_runtime::ValueKey::from(::koto_runtime::Value::Str(k.into())),
+            ::koto_runtime::Value::ExternalFunction(v)
+        )).collect::<::koto_runtime::ValueHashMap>())
+    }
+}
+
+fn create_vtable(vtable: &Ident, items: &[MethodSig]) -> Item {
+    let map = create_map(items);
+    parse_quote! {
+        lazy_static::lazy_static! {
+            static ref #vtable: ::koto_runtime::ValueMap = #map;
+        }
+    }
+}
+
+fn create_module(prelude: &Ident, name: &str, items: &[MethodSig]) -> Stmt {
+    let map = create_map(items);
+    parse_quote! {
+        #prelude.add_map(#name, #map);
+    }
+}
+
+//TODO: We may want to allow generics at some point, but we'd need to introduce a new type to parse them
+fn create_binding(ty_name: &str, _generics: &str, ty_vtable: &Ident) -> impl Iterator<Item = Item> {
+    let ty: Ident = ident(ty_name);
+    IntoIterator::into_iter(//if generics.is_empty() {
+        [
+            parse_quote! {
+                impl ::koto_runtime::ExternalValue for #ty {
+                    fn value_type(&self) -> String {
+                        #ty_name.into()
+                    }
+                }
+            },
+            parse_quote! {
+                impl ::lang_bindings::FromValue for #ty {
+                    fn from_value(
+                        key_path: &::lang_bindings::KeyPath<'_>,
+                        value: &::koto_runtime::Value,
+                    ) -> std::result::Result<Self, ::koto_runtime::RuntimeError> {
+                        if let ::koto_runtime::Value::ExternalValue(exval, ..) = value {
+                            if let Some(v) = exval.as_ref().write().downcast_mut::<Self>() {
+                                Ok(v.clone())
+                            } else {
+                                ::koto_runtime::runtime_error!(
+                                    "Invalid type for external value, found '{}'",
+                                    exval.as_ref().read().value_type(),
+                                )
+                            }
+                        } else {
+                            ::koto_runtime::runtime_error!("Expected external value at {}", key_path)
+                        }
+                    }
+                }
+            },
+            parse_quote! {
+                impl ::lang_bindings::IntoValue for #ty {
+                    fn into_value(self) -> ::koto_runtime::Value {
+                        ::koto_runtime::Value::make_external_value(self, #ty_vtable.clone())
+                    }
+                }
+            },
+        ]
+/*     } else {
+        let params: Punctuated<GenericParam, syn::Token![,]>::parse_terminated(generics).unwrap();
+        [
+            parse_quote! {        
+                impl<#params> ::koto_runtime::ExternalValue<#params> for #ty {
+                    fn value_type(&self) -> String {
+                        stringify!(#ty).into()
+                    }
+                }
+            },
+            parse_quote! {        
+                impl<#params> ::lang_bindings::FromValue<#params> for #ty {
+                    fn from_value(
+                        key_path: &::lang_bindings::KeyPath<'_>,
+                        value: &::koto_runtime::Value,
+                    ) -> Result<Self, ::koto_runtime::RuntimeError> {
+                        if let ::koto_runtime::Value::ExternalValue(exval, ..) = value {
+                            if let Some(v) = exval.as_ref().write().downcast_mut::<Self>() {
+                                Ok(v.clone())
+                            } else {
+                                koto_runtime::runtime_error!(
+                                    "Invalid type for external value, found '{}'",
+                                    exval.as_ref().read().value_type(),
+                                )
+                            }
+                        } else {
+                            koto_runtime::runtime_error!("Expected external value at {}", key_path)
+                        }
+                    }
+                }
+            },
+            parse_quote! {
+                impl ::lang_bindings::IntoValue for #ty {
+                    fn into_value(self) -> Value {
+                        ::koto_runtime::Value::make_external_value(self, #ty_vtable.clone())
+                    }
+                }
+            },
+        ]
+    }*/)
+}
+
+#[proc_macro]
+pub fn bindlang_main(mut code: TokenStream) -> TokenStream {
+    let Context {
+        ref bare_fns,
+        ref modules,
+        ref vtables,
+        ref types,
+    } = *CONTEXT.lock().unwrap();
+    let prelude = ident("prelude");
+    let vtable_idents = vtables
+        .keys()
+        .map(|ty| (ty.to_string(), vtable_ident(ty)))
+        .collect::<HashMap<String, Ident>>();
+    let vtable_items = vtables
+        .iter()
+        .map(|(name, items)| create_vtable(&vtable_idents[name], items,));
+    let type_bindings = types
+        .iter()
+        .flat_map(|(name, generics)| create_binding(name, generics, &vtable_idents[name]));
+    let prelude_map = create_map(bare_fns);
+    let module_stmts = modules
+        .iter()
+        .map(|(name, items)| create_module(&prelude, name, items));
+    //TODO we may insert the "synth" string below in the _code tokens
+    code.extend(TokenStream::from(quote! {
+        #(#vtable_items)*
+        #(#type_bindings)*
+        fn bindlang_init(#prelude: &mut ::koto_runtime::ValueMap) {
+            #prelude.add_map("synth", #prelude_map);
+            #(#module_stmts)*
+        }
+    }));
+    code
 }
 
 fn vtable_ident(ty: &str) -> Ident {
     ident(&format!("__BINDLANG_VTABLE_{}__", ty))
 }
 
-fn next_binding_fn(block: Block) -> Item {
-    let binding_count = LANG_BINDING_COUNT.fetch_add(1, Ordering::SeqCst);
-    let binding_fn_ident = ident(&format!("__bindlang_{}__", binding_count));
-    let call_last_fn: Stmt = if let Some(last_count) = binding_count.checked_sub(1) {
-        let last_fn_ident = ident(&format!("__bindlang_{}__", last_count));
-        parse_quote! {
-            #last_fn_ident(prelude);
-        }
-    } else {
-        parse_quote! { {} }
-    };
-    let stmts = block.stmts;
-    parse_quote! {
-        #[inline(always)]
-        fn #binding_fn_ident(prelude: &mut ::koto_runtime::ValueMap) {
-            #call_last_fn
-            #(#stmts);*
-        }
-    }
-}
-
-/// enrich the "prelude" with the bound items
-#[proc_macro]
-pub fn bindlang_init(code: TokenStream) -> TokenStream {
-    let prelude = parse_macro_input!(code as Ident);
-    if let Some(binding_count) = LANG_BINDING_COUNT.load(Ordering::SeqCst).checked_sub(1) {
-        let binding_fn_ident = ident(&format!("__bindlang_{}__", binding_count));
-        TokenStream::from(quote! {
-            #binding_fn_ident(&mut #prelude)
-        })
-    } else {
-        TokenStream::default()
-    }
-}
-
-fn add_fn_binding(
-    map: &Ident,
-    Signature { ident: ref fn_ident, inputs, .. }: &Signature,
-    self_ty: Option<&Type>) -> Stmt {
-    let fn_name = fn_ident.to_string();
-    let inputs_len = inputs.len();
-    let names: Vec<_> = (0..inputs_len)
-        .map(|i| ident(&format!("a{}", i)))
-        .collect();
-    let mut exprs = names
-        .iter()
-        .enumerate()
-        .map(|(i, name)| parse_quote!(FromValue::from_value(&KeyPath::Index(#i, None), #name,)?));
-    let call: Expr = if let Some(ty) = self_ty {
-        let _: Option<Expr> = exprs.next();
-        if inputs.first().map_or(false, |a| matches!(a, FnArg::Receiver(_))) {
-            parse_quote!(#ty :: from_value(&KeyPath::Index(0, None), a0)?. #fn_ident(#(#exprs),*))
-        } else {
-            parse_quote!(#ty :: #fn_ident(#(#exprs),*))
-        }
-    } else {
-        parse_quote!(#fn_ident(#(#exprs),*))
-    };
-    parse_quote! {
-        #map.add_fn(
-            #fn_name,
-            |vm, args| {
-                match vm.get_args(args) {
-                    [#(#names),*] => Ok(#call.into_value()),
-                    args => fn_type_error(#fn_name, stringify!(#inputs), args),
-                }
-            }
-        );
-    }
-}
-
-fn bind_fn(sig: &Signature, self_ty: Option<&Type>) -> Item {
-    let add_function = add_fn_binding(&ident("prelude"), sig, self_ty);
-    next_binding_fn(parse_quote! {{
-        use lang_bindings::{FromValue, IntoValue, KeyPath, fn_type_error};
-        #add_function
-    }})
-}
-
-fn type_to_string(ty: &Type) -> String {
-    if let Type::Path(ref qpath) = ty {
-        qpath.path.segments.last().expect("an ident").ident.to_string()
-    } else {
-        panic!("Cannot bind an impl on an unnamed type");
-    }
-}
-
-fn bind_item(input: Item) -> TokenStream {
-    TokenStream::from(match &input {
+#[proc_macro_attribute]
+pub fn bindlang(_attrs: TokenStream, code: TokenStream) -> TokenStream {
+    let code_cloned = code.clone();
+    let input = parse_macro_input!(code_cloned as Item);
+    match &input {
         //TODO: bind trait impls
-        Item::Impl(ItemImpl { trait_: None, self_ty, ref items, ..}) => {
-            let ty_str = type_to_string(&self_ty);
-            let vtable_map = ident("map"); //vtable_ident(&ty_str);
-            let module = ident("module"); //TODO: How would that work with generics?
-            let mut vtable_members = Vec::new();
-            let mut module_members = Vec::new();
+        Item::Impl(ItemImpl {
+            attrs,
+            trait_: None,
+            self_ty,
+            items,
+            ..
+        }) => {
             for item in items {
-                if let ImplItem::Method(ImplItemMethod { ref sig, ..}) = item {
-                    if sig.receiver().is_some() { // method => vtable
-                        vtable_members.push(add_fn_binding(&vtable_map, sig, Some(&self_ty)));
-                    } else { // selfless => module
-                        module_members.push(add_fn_binding(&module, sig, Some(&self_ty)));
-                    }
+                if let ImplItem::Method(ImplItemMethod { ref sig, .. }) = item {
+                    fn_binding(sig, get_module(attrs), Some(self_ty));
                 }
                 //TODO: Do we want or need to bind other items? E.g. statics?
             }
-            
-            let setup_vtable: Vec<Item> = if vtable_members.is_empty() {
-                vec![]
-            } else {
-                let vtable = vtable_ident(&ty_str);
-                vec![parse_quote! {
-                    lazy_static::lazy_static! {
-                        static ref #vtable: ::koto_runtime::ValueMap = {
-                            use lang_bindings::{FromValue, IntoValue, KeyPath, fn_type_error};
-                            let mut #vtable_map = ::koto_runtime::ValueMap::new();
-                            #(#vtable_members)*
-                            #vtable_map
-                        };
-                    }
-                }]
-            };
-            let setup_module: Vec<Item> = if module_members.is_empty() {
-                vec![]
-            } else {
-                vec![next_binding_fn(parse_quote! {{
-                    use lang_bindings::{FromValue, IntoValue, KeyPath, fn_type_error};
-                    let mut #module = ::koto_runtime::ValueMap::new();
-                    #(#module_members)*
-                    prelude.add_map(#ty_str, #module);
-                }})]
-            };
-
-            quote! { #input #(#setup_vtable)* #(#setup_module)* }
         }
-        Item::Fn(ItemFn { ref sig, .. }) => {
-            let binding = bind_fn(sig, None);
-            quote! { #input #binding }
-        },
-        _ => quote! { #input const NO_BINDLANG_FOR_THIS: () = (); },
-    })
-}
-
-#[proc_macro_attribute]
-pub fn bindlang(_attrs: TokenStream, code: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(code as Item);
-    bind_item(input)
-}
-
-#[proc_macro_derive(ExternalValue)]
-pub fn external_value(code: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(code as Item);
-    TokenStream::from(match input {
-        Item::Struct(ItemStruct { ident: ref ty, generics: Generics { ref params, .. }, .. }) | 
-        Item::Enum(ItemEnum { ident: ref ty, generics: Generics { ref params, .. }, .. }) => {
-            let ty_vtable = vtable_ident(&ty.to_string());
-            if params.is_empty() {
-                quote! {
-                    impl ::koto_runtime::ExternalValue for #ty {
-                        fn value_type(&self) -> String {
-                            stringify!(#ty).into()
-                        }
-                    }
-                    
-                    use koto_runtime::runtime_error;
-                    
-                    impl ::lang_bindings::FromValue for #ty {
-                        fn from_value(
-                            key_path: &::lang_bindings::KeyPath<'_>,
-                            value: &::koto_runtime::Value,
-                        ) -> Result<Self, ::koto_runtime::RuntimeError> {
-                            if let ::koto_runtime::Value::ExternalValue(exval, ..) = value {
-                                if let Some(v) = exval.as_ref().write().downcast_mut::<Self>() {
-                                    Ok(v.clone())
-                                } else {
-                                    runtime_error!(
-                                        "Invalid type for external value, found '{}'",
-                                        exval.as_ref().read().value_type(),
-                                    )
-                                }
-                            } else {
-                                runtime_error!("Expected external value at {}", key_path)
-                            }
-                        }
-                    }
-
-                    impl ::lang_bindings::IntoValue for #ty {
-                        fn into_value(self) -> Value {
-                            ::koto_runtime::Value::make_external_value(self, #ty_vtable.clone())
-                        }
-                    }
-                }
-            } else {
-                quote! {
-                    impl<#params> ::koto_runtime::ExternalValue<#params> for #ty {
-                        fn value_type(&self) -> String {
-                            stringify!(#ty).into()
-                        }
-                    }
-
-                    use koto_runtime::runtime_error;
-
-                    impl<#params> ::lang_bindings::FromValue<#params> for #ty {
-                        fn from_value(
-                            key_path: &::lang_bindings::KeyPath<'_>,
-                            value: &::koto_runtime::Value,
-                        ) -> Result<Self, ::koto_runtime::RuntimeError> {
-                            if let ::koto_runtime::Value::ExternalValue(exval, ..) = value {
-                                if let Some(v) = exval.as_ref().write().downcast_mut::<Self>() {
-                                    Ok(v.clone())
-                                } else {
-                                    runtime_error!(
-                                        "Invalid type for external value, found '{}'",
-                                        exval.as_ref().read().value_type(),
-                                    )
-                                }
-                            } else {
-                                runtime_error!("Expected external value at {}", key_path)
-                            }
-                        }
-                    }
-                    
-                    impl ::lang_bindings::IntoValue for #ty {
-                        fn into_value(self) -> Value {
-                            ::koto_runtime::Value::make_external_value(self, #ty_vtable.clone())
-                        }
-                    }
-
-                }
-            }
-        },
-        _ => panic!("Cannot derive ExternalValue for anything but structs or enums"),
-    })
+        Item::Fn(ItemFn {
+            ref attrs, ref sig, ..
+        }) => {
+            fn_binding(sig, get_module(attrs), None);
+        }
+        Item::Struct(ItemStruct {
+            attrs,
+            ident: ty,
+            generics: Generics { params, .. },
+            ..
+        })
+        | Item::Enum(ItemEnum {
+            attrs,
+            ident: ty,
+            generics: Generics { params, .. },
+            ..
+        }) => {
+            // record the type, derives and generics (as String)
+            let ty_string = ty.to_string();
+            get_derives(ty_string.clone(), attrs);
+            CONTEXT.lock().unwrap().types.insert(ty_string, quote!(#params).to_string());
+        }
+        _ => (), //TODO: Report a usable error
+    }
+    // we emit the code as is
+    code
 }

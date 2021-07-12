@@ -100,12 +100,12 @@ pub type OnceInfallible<G> = TryOnce<Infallible<G, Error>>;
 
 macro_rules! derive_from {
     {
-	#[$attr:meta]
+	$(#[$attr:meta])*
 	$vis:vis enum $id:ident {
 	    $($variant:ident$(($ty:ty))?,)*
 	}
     } => {
-	#[$attr]
+	$(#[$attr])*
 	$vis enum $id {
 	    $($variant$(($ty))?,)*
 	}
@@ -174,6 +174,7 @@ where
 }
 
 derive_from! {
+    #[bindlang::bindlang]
     #[derive(Debug, Clone)]
     pub enum Value {
     Null(()),
@@ -183,6 +184,21 @@ derive_from! {
     DateTime(ChronoValue),
     Object(BTreeMap<String, Value>),
     Array(Vec<Value>),
+    }
+}
+
+impl Display for Value {
+    //TODO: We want to make this something sensible for all types
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+           Self::Null(_) => write!(f, "null"),
+           Self::Bool(bool) => write!(f, "{}", bool),
+           Self::Number(number) => write!(f, "{}", number),
+           Self::String(s) => write!(f, "{}", s),
+           Self::DateTime(v) => write!(f, "{:?}", v),
+           Self::Object(map) => write!(f, "{:?}", map),
+           Self::Array(v) => write!(f, "{:?}", v),
+        }
     }
 }
 
