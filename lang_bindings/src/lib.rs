@@ -9,6 +9,7 @@ use koto::runtime::{ValueNumber, RuntimeError, runtime_error};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::error::Error;
 
 pub enum KeyPath<'parent> {
     Index(usize, Option<&'parent KeyPath<'parent>>),
@@ -24,14 +25,14 @@ impl Display for KeyPath<'_> {
                 } else {
                     write!(f, "{}", i)
                 }
-            },
+            }
             &KeyPath::Field(ref i, parent) => {
                 if let Some(p) = parent {
                     write!(f, "{}.{}", p, i)
                 } else {
                     write!(f, "{}", i)
                 }
-            },
+            }
         }
     }
 }
@@ -151,46 +152,60 @@ impl<K: FromValue + PartialOrd + Ord, V: FromValue> FromValue for BTreeMap<K, V>
     }
 }
 
+impl<T, E> IntoValue for Result<T, E>
+    where T: IntoValue,
+          E: Error
+{
+    fn into_value(self) -> ValueResult {
+        match self {
+            Ok(ok) => ok.into_value(),
+            Err(e) => runtime_error!("{}", e)
+        }
+    }
+}
+
+type ValueResult = Result<Value, RuntimeError>;
+
 /// Make a koto Value out of some Rust value
 pub trait IntoValue: Sized {
-    fn into_value(self) -> Value;
+    fn into_value(self) -> ValueResult;
 }
 
 impl IntoValue for () {
-    fn into_value(self) -> Value {
-        Value::Empty
+    fn into_value(self) -> ValueResult {
+        Ok(Value::Empty)
     }
 }
 
 impl IntoValue for bool {
-    fn into_value(self) -> Value {
-        Value::Bool(self)
+    fn into_value(self) -> ValueResult {
+        Ok(Value::Bool(self))
     }
 }
 
 impl<T: Clone + IntoValue> IntoValue for &T {
-    fn into_value(self) -> Value {
+    fn into_value(self) -> ValueResult {
         self.clone().into_value()
     }
 }
 
 impl IntoValue for String {
-    fn into_value(self) -> Value {
-        Value::Str(self.into())
+    fn into_value(self) -> ValueResult {
+        Ok(Value::Str(self.into()))
     }
 }
 
 impl IntoValue for &str {
-    fn into_value(self) -> Value {
-        Value::Str(self.into())
+    fn into_value(self) -> ValueResult {
+        Ok(Value::Str(self.into()))
     }
 }
 
 macro_rules! impl_into_value_num {
     (one $ty:ty, $as_ty:ty, $variant:path) => {
         impl IntoValue for $ty {
-            fn into_value(self) -> Value {
-                Value::Number($variant(self as $as_ty))
+            fn into_value(self) -> ValueResult {
+                Ok(Value::Number($variant(self as $as_ty)))
             }
         }
     };

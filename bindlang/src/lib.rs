@@ -30,7 +30,7 @@ impl MethodSig {
         let names: Vec<_> = (0..self.args).map(|i| ident(&format!("a{}", i))).collect();
         let mut exprs = names.iter().enumerate().map(|(i, name)| {
             parse_quote! {
-                ::lang_bindings::FromValue::from_value(&KeyPath::Index(#i, None), #name)?
+                ::lang_bindings::FromValue::from_value(&::lang_bindings::KeyPath::Index(#i, None), #name)?
             }
         });
         let (call, is_method): (Expr, bool) = if let Some(ty) = &self.self_ty {
@@ -55,7 +55,7 @@ impl MethodSig {
                 #fn_name,
                 ::koto_runtime::ExternalFunction::new(|vm, args| {
                     match vm.get_args(args) {
-                        [#(#names),*] => Ok(::lang_bindings::IntoValue::into_value(#call)),
+                        [#(#names),*] => ::lang_bindings::IntoValue::into_value(#call),
                         args => ::lang_bindings::fn_type_error(#fn_name, #inputs, args),
                     }
                 }, #is_method),
@@ -227,8 +227,8 @@ fn create_binding(ty_name: &str, _generics: &str, ty_vtable: &Ident) -> impl Ite
             },
             parse_quote! {
                 impl ::lang_bindings::IntoValue for #ty {
-                    fn into_value(self) -> ::koto_runtime::Value {
-                        ::koto_runtime::Value::make_external_value(self, #ty_vtable.clone())
+                    fn into_value(self) -> std::result::Result<::koto_runtime::Value, ::koto_runtime::RuntimeError> {
+                        Ok(::koto_runtime::Value::make_external_value(self, #ty_vtable.clone()))
                     }
                 }
             },
