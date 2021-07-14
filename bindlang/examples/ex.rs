@@ -15,6 +15,7 @@ pub fn anotherone() {
 #[derive(Clone, Debug, Default)]
 pub struct MyType;
 
+//#[bindlang]
 impl Display for MyType {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         write!(f, "{:?}", self)

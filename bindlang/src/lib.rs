@@ -18,11 +18,11 @@ struct MethodSig {
     name: String,
     args: usize,
     inputs: String,
-    self_ty: Option<String>,
+    self_ty: Option<(String, Option<String>)>,
 }
 
 impl MethodSig {
-    // create a tuple expr
+    // create a tuple expr of (call, is_method)
     fn to_tuple(&self) -> Expr {
         let fn_name = &self.name;
         let fn_ident = ident(&self.name);
@@ -33,7 +33,7 @@ impl MethodSig {
                 ::lang_bindings::FromValue::from_value(&::lang_bindings::KeyPath::Index(#i, None), #name)?
             }
         });
-        let (call, is_method): (Expr, bool) = if let Some(ty) = &self.self_ty {
+        let (call, is_method): (Expr, bool) = if let Some((ty, trait_ty)) = &self.self_ty {
             let ty_ident = ident(ty);
             if self.args > 0 {
                 let a0: &Ident = &names[0];
@@ -44,6 +44,9 @@ impl MethodSig {
                     },
                     true,
                 )
+            } else if let Some(trait_ty) = trait_ty {
+                let trait_ty: Type = parse_str(trait_ty).unwrap();
+                (parse_quote! { <#ty_ident as #trait_ty>::#fn_ident() }, false)
             } else {
                 (parse_quote! { #ty_ident :: #fn_ident() }, false)
             }
@@ -77,14 +80,14 @@ lazy_static::lazy_static! {
     static ref CONTEXT: Arc<Mutex<Context>> = Arc::new(Mutex::new(Context::default()));
 }
 
-fn fn_binding(sig: &Signature, module: Option<String>, self_ty: Option<&Type>) {
+fn fn_binding(sig: &Signature, module: Option<String>, self_ty: Option<&Type>, trait_ty: Option<String>) {
     let fn_ident = &sig.ident;
     let inputs = &sig.inputs;
     let method_sig = MethodSig {
         name: fn_ident.to_string(),
         args: inputs.len(),
         inputs: quote!(#inputs).to_string(),
-        self_ty: self_ty.map(|ty| quote!(#ty).to_string()),
+        self_ty: self_ty.map(|ty| (quote!(#ty).to_string(), trait_ty)),
     };
     let ctx = &mut *CONTEXT.lock().unwrap();
     if self_ty.is_some() {
@@ -93,7 +96,7 @@ fn fn_binding(sig: &Signature, module: Option<String>, self_ty: Option<&Type>) {
         } else {
             &mut ctx.modules
         }
-        .entry(method_sig.self_ty.clone().unwrap())
+        .entry(method_sig.self_ty.as_ref().map(|(s, _)| s.clone()).unwrap())
         .or_insert_with(Vec::new)
     } else if let Some(m) = module {
         ctx.modules.entry(m).or_insert_with(Vec::new)
@@ -133,7 +136,7 @@ fn get_derives(ty: String, attrs: &[Attribute]) {
             for derive in get_attr_parens(attr).split(',') {
                 let derive = derive.trim_matches(char::is_whitespace);
                 for (trt, (name, args)) in DERIVES {
-                    if *trt == derive {
+                    if trt == &derive {
                         let args = *args;
                         let ctx = &mut CONTEXT.lock().unwrap();
                         if args == 0 {
@@ -144,7 +147,7 @@ fn get_derives(ty: String, attrs: &[Attribute]) {
                                     name: name.to_string(),
                                     args,
                                     inputs: String::new(),
-                                    self_ty: Some(ty.clone()),
+                                    self_ty: Some((ty.clone(), Some(trt.to_string()))),
                                 })
                         } else {
                             ctx.vtables.entry(ty.clone()).or_insert_with(Vec::new).push(
@@ -152,7 +155,7 @@ fn get_derives(ty: String, attrs: &[Attribute]) {
                                     name: name.to_string(),
                                     args,
                                     inputs: "self".to_string(), //TODO: add to DERIVES if we add traits w/ more args
-                                    self_ty: Some(ty.clone()),
+                                    self_ty: Some((ty.clone(), Some(trt.to_string()))),
                                 },
                             );
                         }
@@ -322,14 +325,14 @@ pub fn bindlang(_attrs: TokenStream, code: TokenStream) -> TokenStream {
         //TODO: bind trait impls
         Item::Impl(ItemImpl {
             attrs,
-            trait_: None,
+            trait_,
             self_ty,
             items,
             ..
         }) => {
             for item in items {
                 if let ImplItem::Method(ImplItemMethod { ref sig, .. }) = item {
-                    fn_binding(sig, get_module(attrs), Some(self_ty));
+                    fn_binding(sig, get_module(attrs), Some(self_ty), trait_.as_ref().map(|(_, path, _)| quote!(#path).to_string()));
                 }
                 //TODO: Do we want or need to bind other items? E.g. statics?
             }
@@ -337,7 +340,7 @@ pub fn bindlang(_attrs: TokenStream, code: TokenStream) -> TokenStream {
         Item::Fn(ItemFn {
             ref attrs, ref sig, ..
         }) => {
-            fn_binding(sig, get_module(attrs), None);
+            fn_binding(sig, get_module(attrs), None, None);
         }
         Item::Struct(ItemStruct {
             attrs,
